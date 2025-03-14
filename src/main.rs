@@ -3,11 +3,12 @@ mod widget;
 mod vertex;
 mod math;
 mod graphics;
+use csgrs::csg::CSG;
 
 use druid::{AppLauncher, PlatformError, WindowDesc, LocalizedString};
 
 fn main() -> Result<(), PlatformError> {
-    let main_window = WindowDesc::new(widget::CubeWidget::new())
+    let main_window = WindowDesc::new(widget::CSGWidget::new())
         .title(LocalizedString::new("3D Cube with Per-Pixel Lighting"))
         .window_size((400.0, 400.0));
 

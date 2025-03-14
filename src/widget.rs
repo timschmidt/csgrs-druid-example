@@ -13,9 +13,12 @@ use druid::{
     Color, RenderContext, Widget, WindowDesc,
 };
 use std::time::Instant;
+use csgrs::csg::CSG;
+use csgrs::vertex::Vertex as CSGVertex;
 
 /// 3D cube widget
-pub struct CubeWidget {
+pub struct CSGWidget {
+    csg: CSG::<()>,
     frames_since_last_update: usize,
     last_fps_calculation: Instant,
     fps: f64,
@@ -29,9 +32,10 @@ pub struct CubeWidget {
     size: Size,
 }
 
-impl CubeWidget {
+impl CSGWidget {
     pub fn new() -> Self {
-        CubeWidget {
+        CSGWidget {
+            csg: CSG::<()>::sphere(10.0, 16, 12, None),
             frames_since_last_update: 0,
             last_fps_calculation: Instant::now(),
             fps: 0.0,
@@ -41,100 +45,23 @@ impl CubeWidget {
             size: Size::ZERO,
         }
     }
-
-    /// Computes the projected vertices for the current state
-    fn compute_projected_vertices(&self, data: &AppState) -> Vec<Vertex> {
+    
+    /// A helper to project a 3D point to 2D screen coordinates.
+    fn project_point(&self, pos: &csgrs::vertex::Vertex) -> [f64; 2] {
+        // For example, assume an orthographic projection where:
+        //  - We ignore the z coordinate,
+        //  - We center the object in the widget,
+        //  - And we apply a uniform scale factor.
         let center = Point::new(self.size.width / 2.0, self.size.height / 2.0);
-        let scale = (self.size.height.min(self.size.width) / 4.0) * data.zoom; // Adjusted scale
-
-        // Define cube vertices
-        let vertices = [
-            (-1.0, -1.0, -1.0), // 0
-            (1.0, -1.0, -1.0),  // 1
-            (1.0, 1.0, -1.0),   // 2
-            (-1.0, 1.0, -1.0),  // 3
-            (-1.0, -1.0, 1.0),  // 4
-            (1.0, -1.0, 1.0),   // 5
-            (1.0, 1.0, 1.0),    // 6
-            (-1.0, 1.0, 1.0),   // 7
-        ];
-
-        // Rotation matrices
-        let (sin_x, cos_x) = data.angle_x.sin_cos();
-        let (sin_y, cos_y) = data.angle_y.sin_cos();
-
-        let rotation_x = [[1.0, 0.0, 0.0], [0.0, cos_x, -sin_x], [0.0, sin_x, cos_x]];
-
-        let rotation_y = [[cos_y, 0.0, sin_y], [0.0, 1.0, 0.0], [-sin_y, 0.0, cos_y]];
-
-        // Combine rotations
-        let rotation_matrix = multiply_matrices(&rotation_y, &rotation_x);
-
-        // Transform and project vertices
-        let transformed_vertices: Vec<[f64; 3]> = vertices
-            .iter()
-            .map(|&(x, y, z)| {
-                let rotated = multiply_matrix_vector(&rotation_matrix, &[x, y, z]);
-                // Apply translation in 3D space
-                [
-                    rotated[0] + data.translation[0] / scale,
-                    rotated[1] + data.translation[1] / scale,
-                    rotated[2],
-                ]
-            })
-            .collect();
-
-        // Compute vertex normals
-        let mut vertex_normals = vec![[0.0; 3]; vertices.len()];
-        let faces = [
-            (0, 1, 2, 3),
-            (5, 4, 7, 6),
-            (4, 0, 3, 7),
-            (1, 5, 6, 2),
-            (4, 5, 1, 0),
-            (3, 2, 6, 7),
-        ];
-
-        for &(a, b, c, d) in faces.iter() {
-            let normal = calculate_normal(
-                &transformed_vertices[a],
-                &transformed_vertices[b],
-                &transformed_vertices[c],
-            );
-            for &index in &[a, b, c, d] {
-                vertex_normals[index][0] += normal[0];
-                vertex_normals[index][1] += normal[1];
-                vertex_normals[index][2] += normal[2];
-            }
-        }
-        for normal in vertex_normals.iter_mut() {
-            let length =
-                (normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2]).sqrt();
-            normal[0] /= length;
-            normal[1] /= length;
-            normal[2] /= length;
-        }
-
-        // Create vertices with normals and screen positions
-        let vertices_with_normals: Vec<Vertex> = transformed_vertices
-            .iter()
-            .zip(vertex_normals.iter())
-            .map(|(&position, &normal)| {
-                let screen_x = position[0] * scale + center.x;
-                let screen_y = position[1] * scale + center.y;
-                Vertex {
-                    position,
-                    screen_position: [screen_x, screen_y],
-                    normal,
-                }
-            })
-            .collect();
-
-        vertices_with_normals
+        // Here we assume a scale based on widget size and a zoom factor (say 1.0)
+        let scale = (self.size.height.min(self.size.width) / 4.0) * 1.0;
+        let screen_x = pos.pos.coords.x * scale + center.x;
+        let screen_y = pos.pos.coords.y * scale + center.y;
+        [screen_x, screen_y]
     }
 }
 
-impl Widget<AppState> for CubeWidget {
+impl Widget<AppState> for CSGWidget {
     /// Handle events for the cube widget
     fn event(&mut self, ctx: &mut EventCtx, event: &Event, data: &mut AppState, _env: &Env) {
         match event {
@@ -279,21 +206,13 @@ impl Widget<AppState> for CubeWidget {
                 if !data.paused {
                     self.last_mouse_pos = mouse_event.pos;
                     // Compute projected vertices
-                    let vertices_with_normals = self.compute_projected_vertices(data);
 
                     // Define cube faces (each face is defined by 4 vertex indices)
-                    let faces = [
-                        (0, 1, 2, 3),
-                        (5, 4, 7, 6),
-                        (4, 0, 3, 7),
-                        (1, 5, 6, 2),
-                        (4, 5, 1, 0),
-                        (3, 2, 6, 7),
-                    ];
-
+                    
                     let mut clicked_inside_cube = false;
-                    let click_point = [mouse_event.pos.x, mouse_event.pos.y];
+                    let _click_point = [mouse_event.pos.x, mouse_event.pos.y];
 
+                    /*
                     for &(a, b, c, d) in &faces {
                         // Triangle 1: a, b, c
                         let v0 = &vertices_with_normals[a];
@@ -322,6 +241,7 @@ impl Widget<AppState> for CubeWidget {
                             break;
                         }
                     }
+                    */
 
                     if clicked_inside_cube {
                         match mouse_event.button {
@@ -411,7 +331,7 @@ impl Widget<AppState> for CubeWidget {
     }
 
     /// Paint the cube widget
-    fn paint(&mut self, ctx: &mut PaintCtx, data: &AppState, _env: &Env) {
+    fn paint(&mut self, ctx: &mut PaintCtx, data: &AppState, env: &Env) {
         // Update FPS calculation
         self.frames_since_last_update += 1;
         let now = Instant::now();
@@ -430,35 +350,6 @@ impl Widget<AppState> for CubeWidget {
         let mut pixel_data = vec![0u8; width * height * 4];
         let mut z_buffer = vec![std::f64::INFINITY; width * height];
 
-        // Compute projected vertices
-        let vertices_with_normals = self.compute_projected_vertices(data);
-
-        // Define cube faces (each face is defined by 4 vertex indices)
-        let faces = [
-            (0, 1, 2, 3),
-            (5, 4, 7, 6),
-            (4, 0, 3, 7),
-            (1, 5, 6, 2),
-            (4, 5, 1, 0),
-            (3, 2, 6, 7),
-        ];
-
-        // Define cube edges (pairs of vertex indices)
-        let edges = [
-            (0, 1),
-            (1, 2),
-            (2, 3),
-            (3, 0), // Front face
-            (4, 5),
-            (5, 6),
-            (6, 7),
-            (7, 4), // Back face
-            (0, 4),
-            (1, 5),
-            (2, 6),
-            (3, 7), // Connecting edges
-        ];
-
         // Define face colors
         let face_colors = [
             Color::rgb8(255, 0, 0),   // Red
@@ -472,48 +363,44 @@ impl Widget<AppState> for CubeWidget {
         // Light source position in world space
         let light_pos_world = data.light_position;
 
-        if data.wireframe {
-            // Draw edges
-            for &(start, end) in &edges {
-                let v0 = &vertices_with_normals[start];
-                let v1 = &vertices_with_normals[end];
-                draw_line(
-                    v0.screen_position[0],
-                    v0.screen_position[1],
-                    v1.screen_position[0],
-                    v1.screen_position[1],
-                    &mut pixel_data,
-                    width,
-                    height,
-                    Color::WHITE,
-                );
-            }
-        } else {
-            // Draw faces
-            for (face_index, &(a, b, c, d)) in faces.iter().enumerate() {
-                // Triangle 1: a, b, c
+        let transformed_csg = self.csg
+            .rotate(data.angle_x, data.angle_y, 0.0)
+            .translate(data.translation[0], data.translation[1], 0.0)
+            .scale(data.zoom, data.zoom, data.zoom);
+        
+        // Tessellate the transformed CSG into triangles.
+        // (This will return a new CSG whose polygons are all triangles.)
+        let tri_csg = transformed_csg.tessellate();
+        
+        // For each triangle, project its vertices and then draw it.
+        for poly in tri_csg.polygons.iter() {
+            if poly.vertices.len() == 3 {
+                let p0 = Vertex {
+                    position: poly.vertices[0].pos.coords.into(),
+                    screen_position: self.project_point(&poly.vertices[0]),
+                    normal: poly.vertices[0].normal.into(),
+                };
+                let p1 = Vertex {
+                    position: poly.vertices[1].pos.coords.into(),
+                    screen_position: self.project_point(&poly.vertices[1]),
+                    normal: poly.vertices[1].normal.into(),
+                };
+                let p2 = Vertex {
+                    position: poly.vertices[2].pos.coords.into(),
+                    screen_position: self.project_point(&poly.vertices[2]),
+                    normal: poly.vertices[2].normal.into(),
+                };
+                
+                // Call your triangle drawing routine.
+                // For example, if you have a function `draw_triangle`:
                 draw_triangle(
-                    &vertices_with_normals[a],
-                    &vertices_with_normals[b],
-                    &vertices_with_normals[c],
+                    &p0, &p1, &p2,
                     &mut pixel_data,
                     &mut z_buffer,
                     width,
                     height,
                     &light_pos_world,
-                    face_colors[face_index],
-                );
-                // Triangle 2: a, c, d
-                draw_triangle(
-                    &vertices_with_normals[a],
-                    &vertices_with_normals[c],
-                    &vertices_with_normals[d],
-                    &mut pixel_data,
-                    &mut z_buffer,
-                    width,
-                    height,
-                    &light_pos_world,
-                    face_colors[face_index],
+                    face_colors[1],
                 );
             }
         }

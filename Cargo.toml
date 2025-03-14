@@ -9,4 +9,5 @@ license = "MIT"
 authors = ["Drew Walton <drewwalton19216801@gmail.com>"]
 
 [dependencies]
+csgrs = "0.16.0"
 druid = "0.8.3"
